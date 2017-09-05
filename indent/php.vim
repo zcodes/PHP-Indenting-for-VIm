@@ -1505,7 +1505,8 @@ function! GetPhpIndent()
 	    " were in this "list"
 	    "
 	    " we handle "use" block statement specifically for now...
-
+	elseif cline =~ '^\s*->*' && last_line !~ '^\s*->*'
+	    let ind = ind + s:sw()
 	elseif AntepenultimateLine =~ '{'.endline && AntepenultimateLine !~? '^\s*use\>' || AntepenultimateLine =~ terminated || AntepenultimateLine =~# s:defaultORcase
 	    let ind = ind + s:sw()
 	    " DEBUG call DebugPrintReturn(1422 . ' AntepenultimateLine:  ' . AntepenultimateLine . '   lastline: ' . last_line . ' LastLineClosed: ' . LastLineClosed)
