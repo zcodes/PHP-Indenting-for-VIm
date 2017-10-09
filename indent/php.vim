@@ -1506,7 +1506,45 @@ function! GetPhpIndent()
 	    "
 	    " we handle "use" block statement specifically for now...
 	elseif cline =~ '^\s*->*' && last_line !~ '^\s*->*'
-	    let ind = ind + s:sw()
+	    "
+	    " indent for special condition
+	    "
+	    " $user->func(
+	    "    'arg1', 'arg2'
+	    " )
+	    "     ->indent_here();
+	    "
+	    " $user
+	    "     ->func(
+	    "         'arg1', 'arg2'
+	    "     )
+	    "     ->no_indent_here();
+	    "
+	    " $user->method(function () {
+	    "     // some code
+	    " })
+	    "     ->indent_here();
+	    "
+	    " $user
+	    "     ->method(function () {
+	    "         //some code
+	    "     })
+	    "     ->no_indent_here();
+	    "
+	    if (last_line =~ '\s*}\=\s*)\s*$')
+		let tmp_lnum = lnum - 1
+		while (1)
+		    if indent(tmp_lnum) == ind
+			if (getline(tmp_lnum) !~ '^\s*->')
+			    let ind = ind + s:sw()
+			endif
+			break
+		    endif
+		    let tmp_lnum = tmp_lnum - 1
+		endwhile
+	    else
+		let ind = ind + s:sw()
+	    endif
 	elseif AntepenultimateLine =~ '{'.endline && AntepenultimateLine !~? '^\s*use\>' || AntepenultimateLine =~ terminated || AntepenultimateLine =~# s:defaultORcase
 	    let ind = ind + s:sw()
 	    " DEBUG call DebugPrintReturn(1422 . ' AntepenultimateLine:  ' . AntepenultimateLine . '   lastline: ' . last_line . ' LastLineClosed: ' . LastLineClosed)
