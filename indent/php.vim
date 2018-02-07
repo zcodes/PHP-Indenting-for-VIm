@@ -518,7 +518,7 @@ if exists("*GetPhpIndent")
     call ResetPhpOptions()
     finish " XXX -- comment this line for easy dev
 endif
-" setlocal debug=msg " XXX -- do not comment this line when modifying this file
+"setlocal debug=msg " XXX -- do not comment this line when modifying this file
 
 " enable debug calls: :%s /" DEBUG \zec//g
 " disable debug calls: :%s /^\s*\zs\zecall DebugPrintReturn/" DEBUG /g
@@ -1594,46 +1594,7 @@ function! GetPhpIndent()
 	    " were in this "list"
 	    "
 	    " we handle "use" block statement specifically for now...
-	elseif cline =~ '^\s*->*' && last_line !~ '^\s*->*'
-	    "
-	    " indent for special condition
-	    "
-	    " $user->func(
-	    "    'arg1', 'arg2'
-	    " )
-	    "     ->indent_here();
-	    "
-	    " $user
-	    "     ->func(
-	    "         'arg1', 'arg2'
-	    "     )
-	    "     ->no_indent_here();
-	    "
-	    " $user->method(function () {
-	    "     // some code
-	    " })
-	    "     ->indent_here();
-	    "
-	    " $user
-	    "     ->method(function () {
-	    "         //some code
-	    "     })
-	    "     ->no_indent_here();
-	    "
-	    if (last_line =~ '\s*}\=\s*)\s*$')
-		let tmp_lnum = lnum - 1
-		while (1)
-		    if indent(tmp_lnum) == ind
-			if (getline(tmp_lnum) !~ '^\s*->')
-			    let ind = ind + s:sw()
-			endif
-			break
-		    endif
-		    let tmp_lnum = tmp_lnum - 1
-		endwhile
-	    else
-		let ind = ind + s:sw()
-	    endif
+
 	elseif AntepenultimateLine =~ '{'.endline && AntepenultimateLine !~? '^\s*use\>' || AntepenultimateLine =~ terminated || AntepenultimateLine =~# s:defaultORcase
 	    let ind = ind + s:sw()
 	    " DEBUG call DebugPrintReturn(1422 . ' AntepenultimateLine:  ' . AntepenultimateLine . '   lastline: ' . last_line . ' LastLineClosed: ' . LastLineClosed)
@@ -1653,7 +1614,7 @@ function! GetPhpIndent()
     endif
 
     " if the previous line begins with a -> then we need to remove one &sw
-    if last_line =~ '^\s*->' && last_line !~? s:structureHead
+    if last_line =~ '^\s*->' && last_line !~? s:structureHead && last_line !~ "(" . s:endline
 	let ind = ind - s:sw()
     endif
 
