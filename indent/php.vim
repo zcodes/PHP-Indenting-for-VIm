@@ -3,8 +3,8 @@
 " Author:	John Wellesz <John.wellesz (AT) teaser (DOT) fr>
 " URL:		http://www.2072productions.com/vim/indent/php.vim
 " Home:		https://github.com/2072/PHP-Indenting-for-VIm
-" Last Change:	2017 March 12th
-" Version:	1.62
+" Last Change:	2018 January 28th
+" Version:	1.65
 "
 "
 "	Type :help php-indent for available options
@@ -40,6 +40,20 @@
 "	or simply 'let' the option PHP_removeCRwhenUnix to 1 and the script will
 "	silently remove them when VIM load this script (at each bufread).
 "
+"
+" Changes: 1.65         - Functions declared as returning references were not
+"                         indented properly (issue #62).
+"
+" Changes: 1.64         - Always ignore case when using syntax highlighting names (issue #52)
+"			- Fix bug introduced in 1.63 (the content of anonymous function
+"			  declarations preceded by a '->' was no longer
+"			  indented correctly) (issue #59)
+"			- Add a new PHP_noArrowMatching option to disable '->'
+"			  indentation matching on multi-line chained calls (issue #59).
+"
+"
+" Changes: 1.63         - Fix chained multi-line '->' indentation (issue #54 and #59)
+"                       - Fix array indentation when PHP_vintage_case_default_indent is set (issue #58)
 "
 " Changes: 1.62         - Fix some multi-line block declaration interferences (issue #49)
 "			- Fix Grouped 'use' declaration (issue #48)
@@ -449,6 +463,12 @@ else
     let b:PHP_outdentphpescape = 1
 endif
 
+if exists("PHP_noArrowMatching")
+    let b:PHP_noArrowMatching = PHP_noArrowMatching
+else
+    let b:PHP_noArrowMatching = 0
+endif
+
 
 if exists("PHP_vintage_case_default_indent") && PHP_vintage_case_default_indent
     let b:PHP_vintage_case_default_indent = 1
@@ -506,7 +526,7 @@ endif
 let s:PHP_validVariable = '[a-zA-Z_\x7f-\xff][a-zA-Z0-9_\x7f-\xff]*'
 let s:notPhpHereDoc = '\%(break\|return\|continue\|exit\|die\|else\)'
 let s:blockstart = '\%(\%(\%(}\s*\)\=else\%(\s\+\)\=\)\=if\>\|\%(}\s*\)\?else\>\|do\>\|while\>\|switch\>\|case\>\|default\>\|for\%(each\)\=\>\|declare\>\|class\>\|trait\>\|use\>\|interface\>\|abstract\>\|final\>\|try\>\|\%(}\s*\)\=catch\>\|\%(}\s*\)\=finally\>\)'
-let s:functionDecl = '\<function\>\%(\s\+'.s:PHP_validVariable.'\)\=\s*(.*'
+let s:functionDecl = '\<function\>\%(\s\+&\='.s:PHP_validVariable.'\)\=\s*(.*'
 let s:endline = '\s*\%(//.*\|#.*\|/\*.*\*/\s*\)\=$'
 " Unstated line?
 " - an "else" at the end of line
@@ -674,7 +694,7 @@ function! Skippmatch()	" {{{
     " that will break the indent algorithm...
     let synname = synIDattr(synID(line("."), col("."), 0), "name")
 	" DEBUG call DebugPrintReturn('Skippmatch():'.synname ." ". b:UserIsTypingComment .' online: ' . line("."))
-    if synname == "Delimiter" || synname == "phpRegionDelimiter" || synname =~# "^phpParent" || synname == "phpArrayParens" || synname =~# '^php\%(Block\|Brace\)' || synname == "javaScriptBraces" || synname =~# '^php\%(Doc\)\?Comment' && b:UserIsTypingComment
+    if synname ==? "Delimiter" || synname ==? "phpRegionDelimiter" || synname =~? "^phpParent" || synname ==? "phpArrayParens" || synname =~? '^php\%(Block\|Brace\)' || synname ==? "javaScriptBraces" || synname =~? '^php\%(Doc\)\?Comment' && b:UserIsTypingComment
 	return 0
     else
 	return 1
@@ -714,6 +734,72 @@ function! BalanceDirection (str)
 
     return balance
 endfun
+
+function! StripEndlineComments (line)
+    " REMOVE comments at end of line before treatment
+    " the first part of the regex removes // from the end of line when they are
+    " followed by a number of '"' which is a multiple of 2. The second part
+    " removes // that are not followed by any '"'
+    " Sorry for this unreadable thing...
+    return substitute(a:line,"\\(//\\|#\\)\\(\\(\\([^\"']*\\([\"']\\)[^\"']*\\5\\)\\+[^\"']*$\\)\\|\\([^\"']*$\\)\\)",'','')
+endfun
+
+function! FindArrowIndent (lnum)  " {{{
+    " - 1 The previous line contains another '->':
+    "    we just need to return the position of this arrow if the
+    "    PHP_noArrowMatching is not set, just add an &sw otherwise.
+    "
+    " - 2 The previous line doesn't contain an '->'
+    "     - 2.1 It's a ')$'
+    "        - recheck the line where the matching '(' is located
+    "            LOOP
+    "
+    "     - 2.2 It's a non-terminated line or anything else (first '->' or not a chained call)
+    "         just return the indent of the previous line + &sw (normal indent)
+
+    let parrentArrowPos = 0
+    let lnum = a:lnum
+    while lnum > 1
+	let last_line = getline(lnum)
+	" the simple case
+	if last_line =~ '^\s*->'
+	    let parrentArrowPos = indent(a:lnum)
+		" DEBUG call DebugPrintReturn(767 . "FindArrowIndent simple case")
+	    break
+	else
+	    " search the position of the arrow
+	    call cursor(lnum, 1)
+	    let cleanedLnum = StripEndlineComments(last_line)
+	    if cleanedLnum =~ '->'
+		if ! b:PHP_noArrowMatching
+		    let parrentArrowPos = searchpos('->', 'W', lnum)[1] - 1
+		    " DEBUG call DebugPrintReturn(767 . "FindArrowIndent returning arrow searchposition")
+		else
+		    let parrentArrowPos = indent(lnum) + s:sw()
+		    " DEBUG call DebugPrintReturn(767 . "FindArrowIndent returning default indent as PHP_noArrowMatching is set")
+		endif
+		break
+	    elseif cleanedLnum =~ ')'.s:endline && BalanceDirection(last_line) < 0
+		call searchpos(')'.s:endline, 'cW', lnum)
+		let openedparent = searchpair('(', '', ')', 'bW', 'Skippmatch()')
+		if openedparent != lnum
+		    let lnum = openedparent
+		else
+		    let openedparent = -1
+		endif
+		" DEBUG call DebugPrintReturn(767 . "FindArrowIndent skipped a () block: new lnum=".lnum)
+
+	    else
+		let parrentArrowPos = indent(lnum) + s:sw()
+		" DEBUG call DebugPrintReturn(767 . "FindArrowIndent default +&sw")
+		break
+	    endif
+	endif
+    endwhile
+
+    " DEBUG call DebugPrintReturn(767 . "FindArrowIndent returns: " . parrentArrowPos)
+    return parrentArrowPos
+endfun "}}}
 
 function! FindTheIfOfAnElse (lnum, StopAfterFirstPrevElse) " {{{
 
@@ -805,7 +891,7 @@ endfunction "}}}
 
 " 2013-08-02: I wish I had lists and dictionaries when I designed this
 " script 9 years ago (wait... what? 9 years !?!?!)...
-let s:SynPHPMatchGroups = {'phpParent':1, 'Delimiter':1, 'Define':1, 'Storageclass':1, 'StorageClass':1, 'Structure':1, 'Exception':1}
+let s:SynPHPMatchGroups = {'phpparent':1, 'delimiter':1, 'define':1, 'storageclass':1, 'structure':1, 'exception':1}
 function! IslinePHP (lnum, tofind) " {{{
     " This function asks to the syntax if the pattern 'tofind' on the line
     " number 'lnum' is PHP code (very slow...).
@@ -829,7 +915,7 @@ function! IslinePHP (lnum, tofind) " {{{
     let synname = synIDattr(synID(a:lnum, coltotest, 0), "name")
 
     " don't see string content as php
-    if synname == 'phpStringSingle' || synname == 'phpStringDouble' || synname == 'phpBacktick'
+    if synname ==? 'phpStringSingle' || synname ==? 'phpStringDouble' || synname ==? 'phpBacktick'
 	if cline !~ '^\s*[''"`]'
 	    return "SpecStringEntrails"
 	else
@@ -838,7 +924,7 @@ function! IslinePHP (lnum, tofind) " {{{
     end
 
     " DEBUG call DebugPrintReturn('IslinePHP(): ' . synname)
-    if get(s:SynPHPMatchGroups, synname) || synname =~ '^php' ||  synname =~? '^javaScript'
+    if get(s:SynPHPMatchGroups, tolower(synname)) || synname =~ '^php' ||  synname =~? '^javaScript'
 	return synname
     else
 	return ""
@@ -879,6 +965,10 @@ function! ResetPhpOptions()
 endfunc
 
 call ResetPhpOptions()
+
+function! GetPhpIndentVersion()
+    return "1.65"
+endfun
 
 function! GetPhpIndent()
     "##############################################
@@ -957,17 +1047,17 @@ function! GetPhpIndent()
 
 	" DEBUG call DebugPrintReturn(869 . ' synname? ' . synname)
 	if synname!=""
-	    if synname == "SpecStringEntrails"
+	    if synname ==? "SpecStringEntrails"
 		" the user has done something ugly *stay calm*
 		let b:InPHPcode = -1 " thumb down
 		" All hope is lost at this point, nothing will be indented
 		" further on.
 		let b:InPHPcode_tofind = ""
-	    elseif synname != "phpHereDoc" && synname != "phpHereDocDelimiter"
+	    elseif synname !=? "phpHereDoc" && synname !=? "phpHereDocDelimiter"
 		let b:InPHPcode = 1
 		let b:InPHPcode_tofind = ""
 
-		if synname =~# '^php\%(Doc\)\?Comment'
+		if synname =~? '^php\%(Doc\)\?Comment'
 		    let b:UserIsTypingComment = 1
 		    " UserIsTypingComment needs to be checked every time
 		    " because we can't reliably detect when it ends.
@@ -1060,7 +1150,7 @@ function! GetPhpIndent()
     if 1 == b:InPHPcode
 
 	" Was last line containing a PHP end tag ?
-	if !b:InPHPcode_and_script && last_line =~ '\%(<?.*\)\@<!?>\%(.*<?\)\@!' && IslinePHP(lnum, '?>')=~"Delimiter"
+	if !b:InPHPcode_and_script && last_line =~ '\%(<?.*\)\@<!?>\%(.*<?\)\@!' && IslinePHP(lnum, '?>')=~?"Delimiter"
 	    if cline !~? s:PHP_startindenttag
 		let b:InPHPcode = 0
 		let b:InPHPcode_tofind = s:PHP_startindenttag
@@ -1096,7 +1186,7 @@ function! GetPhpIndent()
     endif " }}}
 
 
-    " Non PHP code is let as it is
+    " Non PHP code is left as it is
     if 1 > b:InPHPcode && !b:InPHPcode_and_script
 	" DEBUG call DebugPrintReturn(996 . ' ipc? ' . b:InPHPcode . ' ipcs? ' . b:InPHPcode_and_script)
 	return -1
@@ -1172,12 +1262,12 @@ function! GetPhpIndent()
 
     " Find an executable php code line above the current line.
     let lnum = GetLastRealCodeLNum(v:lnum - 1)
-    " DEBUG call DebugPrintReturn(1121 . " last php line: " . lnum)
 
     " last line
     let last_line = getline(lnum)
     " by default
     let ind = indent(lnum)
+    " DEBUG call DebugPrintReturn(1246 . " last php line: " . lnum . " - indent: ".ind." - '".last_line."'")
 
     if ind==0 && b:PHP_default_indenting
 	let ind = b:PHP_default_indenting
@@ -1201,7 +1291,7 @@ function! GetPhpIndent()
 
     " Check for end of comment and indent it like its beginning
     if cline =~ '^\s*\*/'
-	" End comment tags must be indented like start comment tags
+	" End-comment tags must be indented like start-comment tags
 	call cursor(v:lnum, 1)
 	if cline !~ '^\*/'
 	    call search('\*/', 'W')
@@ -1281,7 +1371,8 @@ function! GetPhpIndent()
 	    let last_line_num = GetLastRealCodeLNum(last_line_num - 1)
 	    let previous_line = getline(last_line_num)
 	endwhile
-
+    elseif cline =~ '^\s*->'
+	return FindArrowIndent(lnum)
     elseif last_line =~# unstated && cline !~ '^\s*);\='.endline
 	let ind = ind + s:sw() " we indent one level further when the preceding line is not stated
 	" DEBUG call DebugPrintReturn(1093)
@@ -1324,7 +1415,7 @@ function! GetPhpIndent()
 	let isSingleLineBlock = 0
 	while 1
 	    " let's skip '{}' blocks
-	    if ! isSingleLineBlock && previous_line =~ '^\s*}\|;\s*}'.endline " XXX
+	    if ! isSingleLineBlock && previous_line =~ '^\s*}\|;\s*}'.endline
 		" find the opening '{'
 
 		call cursor(last_line_num, 1)
@@ -1363,11 +1454,11 @@ function! GetPhpIndent()
 
 		" So now it's ok we can check :-)
 		" A good quality is to have confidence in oneself so to know
-		" if yes or no we are in that struct lets test the indent of
+		" if we really are in that structure lets test the indent of
 		" last_line_num and of last_line_num - 1!
 		" If those are == then we are almost done.
 		"
-		" That isn't sufficient, we need to test how the first of
+		" This isn't sufficient, we need to test how the first of
 		" these 2 lines ends...
 
 		" Remember the 'topest' line we found so far
@@ -1430,13 +1521,7 @@ function! GetPhpIndent()
 
     let AntepenultimateLine = getline(plinnum)
 
-    " REMOVE comments at end of line before treatment
-    " the first part of the regex removes // from the end of line when they are
-    " followed by a number of '"' which is a multiple of 2. The second part
-    " removes // that are not followed by any '"'
-    " Sorry for this unreadable thing...
-    let last_line = substitute(last_line,"\\(//\\|#\\)\\(\\(\\([^\"']*\\([\"']\\)[^\"']*\\5\\)\\+[^\"']*$\\)\\|\\([^\"']*$\\)\\)",'','')
-
+    let last_line = StripEndlineComments(last_line)
 
     if ind == b:PHP_default_indenting
 	if last_line =~ terminated && last_line !~# s:defaultORcase
@@ -1446,6 +1531,9 @@ function! GetPhpIndent()
 
     " Indent blocks enclosed by {} or () (default indenting)
     if !LastLineClosed
+
+	" this variable is going to be set when a "()," block was skipped
+	let openedparent = -1
 
 	" the last line isn't a .*; or a }$ line
 	" Indent correctly multilevel and multiline '(.*)' things
@@ -1467,8 +1555,8 @@ function! GetPhpIndent()
 	    " indent if we don't want braces at code level or if the last line
 	    " is not a lonely '{' (default indent for the if block)
 	    if !dontIndent && (!b:PHP_BracesAtCodeLevel || last_line !~# '^\s*{')
-		" DEBUG call DebugPrintReturn(1454. '  +1 indent ')
 		let ind = ind + s:sw()
+		" DEBUG call DebugPrintReturn(1454. '  +1 indent: '.ind)
 	    endif
 
 	    if b:PHP_BracesAtCodeLevel || b:PHP_vintage_case_default_indent == 1
@@ -1476,16 +1564,17 @@ function! GetPhpIndent()
 		let b:PHP_CurrentIndentLevel = ind
 
 		" DEBUG call DebugPrintReturn(1299)
-		return ind + addSpecial
+		" return ind + addSpecial " commented out to fix #58. Couldn't
+		" find a proper reason to return here
 	    endif
 
-	    " If the last line isn't empty and ends with a '),' then check if the
+	    " If the last line ends with a '),' then check if the
 	    " ')' was opened on the same line, if not it means it closes a
 	    " multiline '(.*)' thing and that the current line need to be
 	    " de-indented one time.
-	elseif last_line =~ '\S\+\s*),'.endline && BalanceDirection(last_line) < 0
+	elseif last_line =~ '),'.endline && BalanceDirection(last_line) < 0
 	    call cursor(lnum, 1)
-	    call search('),'.endline, 'W') " line never begins with ) so no need for 'c' flag
+	    call searchpos('),'.endline, 'cW')
 	    " DEBUG call DebugPrintReturn(1373)
 	    let openedparent = searchpair('(', '', ')', 'bW', 'Skippmatch()')
 	    if openedparent != lnum
@@ -1494,7 +1583,7 @@ function! GetPhpIndent()
 
 	    " if the line before starts a block then we need to indent the
 	    " current line.
-	elseif last_line =~ '^\s*'.s:blockstart
+	elseif last_line =~ s:structureHead
 	    let ind = ind + s:sw()
 
 	    " In all other cases if !LastLineClosed indent 1 level higher
@@ -1550,15 +1639,26 @@ function! GetPhpIndent()
 	    " DEBUG call DebugPrintReturn(1422 . ' AntepenultimateLine:  ' . AntepenultimateLine . '   lastline: ' . last_line . ' LastLineClosed: ' . LastLineClosed)
 	endif
 
+
+	" update last_line if necessary
+	if openedparent >= 0
+	    let last_line = StripEndlineComments(getline(openedparent))
+	endif
     endif
 
     " If the current line closes a multiline function call or array def
-    if cline =~  '^\s*[)\]];\='
+    if cline =~ '^\s*[)\]];\='
+	" DEBUG call DebugPrintReturn(1590. '  -1 indent ')
+	let ind = ind - s:sw()
+    endif
+
+    " if the previous line begins with a -> then we need to remove one &sw
+    if last_line =~ '^\s*->' && last_line !~? s:structureHead
 	let ind = ind - s:sw()
     endif
 
     let b:PHP_CurrentIndentLevel = ind
-    " DEBUG call DebugPrintReturn(1433)
+    " DEBUG call DebugPrintReturn(1538 . 'final indent: ' . ind . ' - addSpecial: ' . addSpecial)
     return ind + addSpecial
 endfunction
 
