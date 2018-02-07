@@ -498,7 +498,7 @@ if exists("*GetPhpIndent")
     call ResetPhpOptions()
     finish " XXX -- comment this line for easy dev
 endif
-"setlocal debug=msg " XXX -- do not comment this line when modifying this file
+" setlocal debug=msg " XXX -- do not comment this line when modifying this file
 
 " enable debug calls: :%s /" DEBUG \zec//g
 " disable debug calls: :%s /^\s*\zs\zecall DebugPrintReturn/" DEBUG /g
