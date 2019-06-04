@@ -1,10 +1,10 @@
 " Vim indent file
 " Language:	PHP
-" Author:	John Wellesz <John.wellesz (AT) teaser (DOT) fr>
-" URL:		http://www.2072productions.com/vim/indent/php.vim
+" Author:	John Wellesz <John.wellesz (AT) gmail (DOT) com>
+" URL:		https://www.2072productions.com/vim/indent/php.vim
 " Home:		https://github.com/2072/PHP-Indenting-for-VIm
-" Last Change:	2018 February 14th
-" Version:	1.66
+" Last Change:	2018 December 27th
+" Version:	1.68
 "
 "
 "	Type :help php-indent for available options
@@ -12,14 +12,14 @@
 "	A fully commented version of this file is available on github
 "
 "
-"  If you find a bug, please open a ticket on github.org
+"  If you find a bug, please open a ticket on github.com
 "  ( https://github.com/2072/PHP-Indenting-for-VIm/issues ) with an example of
 "  code that breaks the algorithm.
 "
 
 " NOTE: This script must be used with PHP syntax ON and with the php syntax
 "	script by Lutz Eymers (http://www.isp.de/data/php.vim ) or with the
-"	script by Peter Hodge (http://www.vim.org/scripts/script.php?script_id=1571 )
+"	script by Peter Hodge (https://www.vim.org/scripts/script.php?script_id=1571 )
 "	the later is bunbdled by default with Vim 7.
 "
 "
@@ -40,6 +40,12 @@
 "	or simply 'let' the option PHP_removeCRwhenUnix to 1 and the script will
 "	silently remove them when VIM load this script (at each bufread).
 "
+" Changes: 1.68         - Fix #68: end(if|for|foreach|while|switch)
+"			  identifiers were treated as her doc ending indentifiers and set at column 0.
+"			- WIP: More work on #67: arrow matching involving () not behaving as expected (better but not perfect).
+"
+" Changes: 1.67         - Fix #67: chained calls indentation was aligning on the
+"			  first matching '->' instead of the last one.
 "
 " Changes: 1.66         - Add support for return type declaration on multi-line
 "		          function declarations (issue #64)
@@ -222,7 +228,7 @@
 "
 "
 " Changes: 1.24		- Added compatibility with the latest version of
-"			  php.vim syntax file by Peter Hodge (http://www.vim.org/scripts/script.php?script_id=1571)
+"			  php.vim syntax file by Peter Hodge (https://www.vim.org/scripts/script.php?script_id=1571)
 "			  This fixes wrong indentation and ultra-slow indenting
 "			  on large php files...
 "			- Fixed spelling in comments.
@@ -422,29 +428,17 @@ let b:did_indent = 1
 
 let g:php_sync_method = 0
 
-" Get the effective value of 'shiftwidth'. Vim since 7.3-703 allows a value of
-" 0, which uses the value of 'tabstop', in which case we need to use the
-" shiftwidth() function.
-if exists('*shiftwidth')
-  function! s:sw()
-    return shiftwidth()
-  endfunction
-else
-  function! s:sw()
-    return &shiftwidth
-  endfunction
-endif
 
 " Apply options
 
 if exists("PHP_default_indenting")
-    let b:PHP_default_indenting = PHP_default_indenting * s:sw()
+    let b:PHP_default_indenting = PHP_default_indenting * shiftwidth()
 else
     let b:PHP_default_indenting = 0
 endif
 
 if exists("PHP_outdentSLComments")
-    let b:PHP_outdentSLComments = PHP_outdentSLComments * s:sw()
+    let b:PHP_outdentSLComments = PHP_outdentSLComments * shiftwidth()
 else
     let b:PHP_outdentSLComments = 0
 endif
@@ -529,7 +523,7 @@ endif
 " disable debug calls: :%s /^\s*\zs\zecall DebugPrintReturn/" DEBUG /g
 
 let s:PHP_validVariable = '[a-zA-Z_\x7f-\xff][a-zA-Z0-9_\x7f-\xff]*'
-let s:notPhpHereDoc = '\%(break\|return\|continue\|exit\|die\|else\)'
+let s:notPhpHereDoc = '\%(break\|return\|continue\|exit\|die\|else\|end\%(if\|while\|for\|foreach\|switch\)\)'
 let s:blockstart = '\%(\%(\%(}\s*\)\=else\%(\s\+\)\=\)\=if\>\|\%(}\s*\)\?else\>\|do\>\|while\>\|switch\>\|case\>\|default\>\|for\%(each\)\=\>\|declare\>\|class\>\|trait\>\|use\>\|interface\>\|abstract\>\|final\>\|try\>\|\%(}\s*\)\=catch\>\|\%(}\s*\)\=finally\>\)'
 let s:functionDecl = '\<function\>\%(\s\+&\='.s:PHP_validVariable.'\)\=\s*(.*'
 let s:endline = '\s*\%(//.*\|#.*\|/\*.*\*/\s*\)\=$'
@@ -751,8 +745,8 @@ endfun
 
 function! FindArrowIndent (lnum)  " {{{
     " - 1 The previous line contains another '->':
-    "    we just need to return the position of this arrow if the
-    "    PHP_noArrowMatching is not set, just add an &sw otherwise.
+    "    we just need to return the position of the last arrow if the
+    "    PHP_noArrowMatching is not set. Just add an &sw otherwise.
     "
     " - 2 The previous line doesn't contain an '->'
     "     - 2.1 It's a ')$'
@@ -762,47 +756,71 @@ function! FindArrowIndent (lnum)  " {{{
     "     - 2.2 It's a non-terminated line or anything else (first '->' or not a chained call)
     "         just return the indent of the previous line + &sw (normal indent)
 
-    let parrentArrowPos = 0
+    let parrentArrowPos = -1
+    let cursorPos = -1
     let lnum = a:lnum
     while lnum > 1
 	let last_line = getline(lnum)
 	" the simple case
 	if last_line =~ '^\s*->'
 	    let parrentArrowPos = indent(a:lnum)
-		" DEBUG call DebugPrintReturn(767 . "FindArrowIndent simple case")
+	    " DEBUG call DebugPrintReturn(767 . "FindArrowIndent simple case")
 	    break
 	else
-	    " search the position of the arrow
-	    call cursor(lnum, 1)
-	    let cleanedLnum = StripEndlineComments(last_line)
-	    if cleanedLnum =~ '->'
-		if ! b:PHP_noArrowMatching
-		    let parrentArrowPos = searchpos('->', 'W', lnum)[1] - 1
-		    " DEBUG call DebugPrintReturn(767 . "FindArrowIndent returning arrow searchposition")
-		else
-		    let parrentArrowPos = indent(lnum) + s:sw()
-		    " DEBUG call DebugPrintReturn(767 . "FindArrowIndent returning default indent as PHP_noArrowMatching is set")
-		endif
-		break
-	    elseif cleanedLnum =~ ')'.s:endline && BalanceDirection(last_line) < 0
-		call searchpos(')'.s:endline, 'cW', lnum)
-		let openedparent = searchpair('(', '', ')', 'bW', 'Skippmatch()')
-		if openedparent != lnum
-		    let lnum = openedparent
-		else
-		    let openedparent = -1
-		endif
-		" DEBUG call DebugPrintReturn(767 . "FindArrowIndent skipped a () block: new lnum=".lnum)
 
+	    if b:PHP_noArrowMatching
+		" DEBUG call DebugPrintReturn(768 . "FindArrowIndent returning default indent as PHP_noArrowMatching is set")
+		break
+	    endif
+
+	    let cleanedLnum = StripEndlineComments(last_line)
+
+	    " the previous line ends with a )
+	    if cleanedLnum =~ ')'.s:endline
+		" the () are balanced or more ) than (
+		if BalanceDirection(cleanedLnum) <= 0
+		    " DEBUG call DebugPrintReturn(776 . "XXXXX")
+		    call cursor(lnum, 1)
+		    call searchpos(')'.s:endline, 'cW', lnum)
+		    let openedparent =  searchpair('(', '', ')', 'bW', 'Skippmatch()')
+		    let cursorPos = col(".")
+		    if openedparent != lnum
+			let lnum = openedparent
+			" DEBUG call DebugPrintReturn(784 . "FindArrowIndent skipped a () block: new lnum=".lnum)
+			continue
+		    else
+			" else, searchpair positioned the cursor just at the (
+			" DEBUG call DebugPrintReturn(784 . "FindArrowIndent skipped a same line () block")
+		    endif
+		    " on the same line
+		else
+		    " if the () are imbalanced just resort to default
+		    let parrentArrowPos = -1
+		    " DEBUG call DebugPrintReturn(780 . "FindArrowIndent default +&sw (arrow was inside matching ())")
+		    break
+		end
+	    endif
+
+	    " the previous line does contain an arrow
+	    if cleanedLnum =~ '->'
+		call cursor(lnum, cursorPos == -1 ? strwidth(cleanedLnum) : cursorPos)
+		let parrentArrowPos = searchpos('->', 'cWb', lnum)[1] - 1
+		" DEBUG call DebugPrintReturn(792 . "FindArrowIndent returning arrow searchposition on: " . lnum . "  xxx adjust is " . col("."))
+
+		break
 	    else
-		let parrentArrowPos = indent(lnum) + s:sw()
-		" DEBUG call DebugPrintReturn(767 . "FindArrowIndent default +&sw")
+		let parrentArrowPos = -1
+		" DEBUG call DebugPrintReturn(808 . "FindArrowIndent default +&sw")
 		break
 	    endif
 	endif
     endwhile
 
-    " DEBUG call DebugPrintReturn(767 . "FindArrowIndent returns: " . parrentArrowPos)
+    if parrentArrowPos == -1
+	let parrentArrowPos = indent(lnum) + shiftwidth()
+    end
+
+    " DEBUG call DebugPrintReturn(818 . "FindArrowIndent returns: " . parrentArrowPos)
     return parrentArrowPos
 endfun "}}}
 
@@ -864,7 +882,7 @@ function! FindTheSwitchIndent (lnum) " {{{
     let test = GetLastRealCodeLNum(a:lnum - 1)
 
     if test <= 1
-	return indent(1) - s:sw() * b:PHP_vintage_case_default_indent
+	return indent(1) - shiftwidth() * b:PHP_vintage_case_default_indent
     end
 
     " A closing bracket? let skip the whole block to save some recursive calls
@@ -886,7 +904,7 @@ function! FindTheSwitchIndent (lnum) " {{{
 	return indent(test)
     elseif getline(test) =~# s:defaultORcase
 	" DEBUG call DebugPrintReturn('found a default/case on ' . test)
-	return indent(test) - s:sw() * b:PHP_vintage_case_default_indent
+	return indent(test) - shiftwidth() * b:PHP_vintage_case_default_indent
     else
 	" DEBUG call DebugPrintReturn('recursing from ' . test)
 	return FindTheSwitchIndent(test)
@@ -972,7 +990,7 @@ endfunc
 call ResetPhpOptions()
 
 function! GetPhpIndentVersion()
-    return "1.65"
+    return "1.67"
 endfun
 
 function! GetPhpIndent()
@@ -990,7 +1008,7 @@ function! GetPhpIndent()
     endif
 
     if b:PHP_default_indenting
-	let b:PHP_default_indenting = g:PHP_default_indenting * s:sw()
+	let b:PHP_default_indenting = g:PHP_default_indenting * shiftwidth()
     endif
 
     " current line
@@ -1351,7 +1369,7 @@ function! GetPhpIndent()
     elseif cline =~# s:defaultORcase
 	" DEBUG call DebugPrintReturn(1064)
 	" case and default need a special treatment
-	return FindTheSwitchIndent(v:lnum) + s:sw() * b:PHP_vintage_case_default_indent
+	return FindTheSwitchIndent(v:lnum) + shiftwidth() * b:PHP_vintage_case_default_indent
     elseif cline =~ '^\s*)\=\s*{'
 	let previous_line = last_line
 	let last_line_num = lnum
@@ -1366,7 +1384,7 @@ function! GetPhpIndent()
 
 		" If the PHP_BracesAtCodeLevel is set then indent the '{'
 		if  b:PHP_BracesAtCodeLevel
-		    let ind = ind + s:sw()
+		    let ind = ind + shiftwidth()
 		endif
 
 		" DEBUG call DebugPrintReturn(1083)
@@ -1379,7 +1397,7 @@ function! GetPhpIndent()
     elseif cline =~ '^\s*->'
 	return FindArrowIndent(lnum)
     elseif last_line =~# unstated && cline !~ '^\s*);\='.endline
-	let ind = ind + s:sw() " we indent one level further when the preceding line is not stated
+	let ind = ind + shiftwidth() " we indent one level further when the preceding line is not stated
 	" DEBUG call DebugPrintReturn(1093)
 	return ind + addSpecial
 
@@ -1560,7 +1578,7 @@ function! GetPhpIndent()
 	    " indent if we don't want braces at code level or if the last line
 	    " is not a lonely '{' (default indent for the if block)
 	    if !dontIndent && (!b:PHP_BracesAtCodeLevel || last_line !~# '^\s*{')
-		let ind = ind + s:sw()
+		let ind = ind + shiftwidth()
 		" DEBUG call DebugPrintReturn(1454. '  +1 indent: '.ind)
 	    endif
 
@@ -1589,7 +1607,7 @@ function! GetPhpIndent()
 	    " if the line before starts a block then we need to indent the
 	    " current line.
 	elseif last_line =~ s:structureHead
-	    let ind = ind + s:sw()
+	    let ind = ind + shiftwidth()
 
 	    " In all other cases if !LastLineClosed indent 1 level higher
 	    " _only_ if the ante-penultimate line _is_ 'closed' or if it's a
@@ -1601,7 +1619,7 @@ function! GetPhpIndent()
 	    " we handle "use" block statement specifically for now...
 
 	elseif AntepenultimateLine =~ '{'.endline && AntepenultimateLine !~? '^\s*use\>' || AntepenultimateLine =~ terminated || AntepenultimateLine =~# s:defaultORcase
-	    let ind = ind + s:sw()
+	    let ind = ind + shiftwidth()
 	    " DEBUG call DebugPrintReturn(1422 . ' AntepenultimateLine:  ' . AntepenultimateLine . '   lastline: ' . last_line . ' LastLineClosed: ' . LastLineClosed)
 	endif
 
@@ -1615,13 +1633,13 @@ function! GetPhpIndent()
     " If the current line closes a multiline function call or array def
     if cline =~ '^\s*[)\]];\='
 	" DEBUG call DebugPrintReturn(1615. '  -1 indent ')
-	let ind = ind - s:sw()
+	let ind = ind - shiftwidth()
     endif
 
     " if the previous line begins with a -> then we need to remove one &sw
     if last_line =~ '^\s*->' && last_line !~? s:structureHead && BalanceDirection(last_line) <= 0
 	" DEBUG call DebugPrintReturn(1621. '  -1 indent ')
-	let ind = ind - s:sw()
+	let ind = ind - shiftwidth()
     endif
 
     let b:PHP_CurrentIndentLevel = ind
